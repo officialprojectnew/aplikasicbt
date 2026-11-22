@@ -11,7 +11,7 @@ public final class Config {
     public static final String ALLOWED_HOST = "officialproject.my.id";
 
     /** PIN pengawas untuk keluar aplikasi. Kosongkan ("") jika hanya ingin konfirmasi Ya/Tidak. */
-    public static final String EXIT_PIN = "2026";
+    public static final String EXIT_PIN = "123456789";
 
     /** Aktifkan pin layar (screen pinning) agar tombol Home/Recent sulit dipakai. */
     public static final boolean USE_SCREEN_PINNING = true;

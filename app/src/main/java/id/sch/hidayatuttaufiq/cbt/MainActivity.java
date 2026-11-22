@@ -10,6 +10,7 @@ import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.text.InputType;
 import android.view.View;
 import android.view.WindowInsets;
@@ -24,7 +25,6 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.provider.Settings;
 import android.widget.EditText;
 import android.widget.Toast;
 
@@ -37,6 +37,7 @@ public class MainActivity extends Activity {
 
     private String activeExamUrl = Config.EXAM_URL;
     private String activeAllowedHost = Config.ALLOWED_HOST;
+    private boolean initialPageLoaded = false;
 
     private PermissionRequest pendingWebPermission;
     private boolean waitingPermission = false;   // dialog izin sedang tampil -> jangan hitung sbg pindah app
@@ -57,21 +58,13 @@ public class MainActivity extends Activity {
                     WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         }
         super.onCreate(savedInstanceState);
+        if (Config.BLOCK_SCREENSHOT) {
+            getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE,
+                    WindowManager.LayoutParams.FLAG_SECURE);
+        }
         setContentView(R.layout.activity_main);
 
-        // Ambil URL hasil scan barcode jika tersedia
-        String scannedUrl = getIntent().getStringExtra("URL_UJIAN");
-        if (scannedUrl != null && !scannedUrl.trim().isEmpty()) {
-            activeExamUrl = scannedUrl.trim();
-            Uri parsed = Uri.parse(activeExamUrl);
-            if (parsed.getHost() != null && !parsed.getHost().isEmpty()) {
-                String h = parsed.getHost().toLowerCase();
-                if (h.startsWith("www.")) {
-                    h = h.substring(4);
-                }
-                activeAllowedHost = h;
-            }
-        }
+        applyUrlFromIntent(getIntent());
 
         web = findViewById(R.id.webview);
         splash = findViewById(R.id.splash);
@@ -92,6 +85,46 @@ public class MainActivity extends Activity {
         }
     }
 
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        applyUrlFromIntent(intent);
+        if (web != null) {
+            initialPageLoaded = false;
+            web.loadUrl(activeExamUrl);
+        }
+    }
+
+    private void applyUrlFromIntent(Intent intent) {
+        if (intent == null) return;
+        String scannedUrl = intent.getStringExtra("URL_UJIAN");
+        if (scannedUrl != null && !scannedUrl.trim().isEmpty()) {
+            activeExamUrl = scannedUrl.trim();
+            updateAllowedHost(activeExamUrl);
+        }
+    }
+
+    private void updateAllowedHost(String url) {
+        try {
+            Uri parsed = Uri.parse(url);
+            if (parsed.getHost() != null && !parsed.getHost().isEmpty()) {
+                String h = parsed.getHost().toLowerCase();
+                if (h.startsWith("www.")) {
+                    h = h.substring(4);
+                }
+                activeAllowedHost = h;
+            }
+        } catch (Exception ignored) { }
+    }
+
+    private boolean isHostAllowed(String host) {
+        if (host == null || activeAllowedHost == null) return false;
+        String h = host.toLowerCase();
+        String allowed = activeAllowedHost.toLowerCase();
+        return h.equals(allowed) || h.endsWith("." + allowed);
+    }
+
     @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
     private void setupWebView() {
         WebSettings s = web.getSettings();
@@ -108,7 +141,7 @@ public class MainActivity extends Activity {
         s.setUserAgentString(s.getUserAgentString() + Config.UA_SUFFIX);
 
         CookieManager.getInstance().setAcceptCookie(true);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(web, false);
+        CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
 
         // Matikan seleksi/salin lewat tekan lama
         web.setLongClickable(false);
@@ -123,9 +156,30 @@ public class MainActivity extends Activity {
                 String scheme = u.getScheme();
                 String host = u.getHost();
                 boolean validScheme = "https".equalsIgnoreCase(scheme) || "http".equalsIgnoreCase(scheme);
-                boolean ok = validScheme && host != null
-                        && (host.equalsIgnoreCase(activeAllowedHost)
-                        || host.toLowerCase().endsWith("." + activeAllowedHost.toLowerCase()));
+                if (!validScheme || host == null) {
+                    return true;
+                }
+
+                // Izinkan iframe di dalam halaman ujian tanpa memunculkan peringatan blokir
+                if (!req.isForMainFrame()) {
+                    return false;
+                }
+
+                // Izinkan redirect awal dari shortlink / QR generator / forms.gle
+                // lalu kunci domain tujuan akhirnya sebagai domain ujian aktif
+                if (!initialPageLoaded || req.isRedirect()) {
+                    updateAllowedHost(u.toString());
+                    activeExamUrl = u.toString();
+                    return false;
+                }
+
+                // Izinkan domain login Google jika ujian memakai Google Form / akun Google
+                String h = host.toLowerCase();
+                if (h.equals("accounts.google.com") || h.endsWith(".accounts.google.com")) {
+                    return false;
+                }
+
+                boolean ok = isHostAllowed(host);
                 if (!ok) {
                     Toast.makeText(MainActivity.this,
                             "Tautan di luar sistem ujian diblokir", Toast.LENGTH_SHORT).show();
@@ -142,6 +196,12 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                if (url != null && (url.startsWith("http://") || url.startsWith("https://"))) {
+                    if (!initialPageLoaded) {
+                        updateAllowedHost(url);
+                        initialPageLoaded = true;
+                    }
+                }
                 splash.setVisibility(View.GONE);
             }
 
@@ -322,8 +382,8 @@ public class MainActivity extends Activity {
         final EditText pin = new EditText(this);
         if (usePin) {
             pin.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
-            pin.setHint("PIN pengawas");
-            b.setMessage("Masukkan PIN pengawas untuk keluar. Jawaban yang sudah tersimpan di server tidak hilang.");
+            pin.setHint("PIN");
+            b.setMessage("Masukkan PIN untuk keluar. Jawaban yang sudah tersimpan di server tidak hilang.");
             b.setView(pin);
         } else {
             b.setMessage("Apakah Anda yakin ingin keluar dari aplikasi ujian?");
@@ -340,7 +400,12 @@ public class MainActivity extends Activity {
             finishAndRemoveTask();
         });
         b.setNegativeButton("Lanjut Ujian", (d, w) -> { exitDialogShowing = false; hideSystemUi(); });
-        b.show();
+        AlertDialog dialog = b.create();
+        if (Config.BLOCK_SCREENSHOT && dialog.getWindow() != null) {
+            dialog.getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE,
+                    WindowManager.LayoutParams.FLAG_SECURE);
+        }
+        dialog.show();
     }
 
     @Override
