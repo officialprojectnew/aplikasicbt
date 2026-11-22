@@ -1,41 +1,43 @@
-# HT CBT Exam Browser
+# CBT SDIT Hidayatut Taufiq — Aplikasi Android (WebView)
 
-Aplikasi Android WebView untuk membuka portal CBT sekolah dan otomatis memilih login Siswa.
+Aplikasi pembungkus (exam browser) untuk sistem CBT di
+`https://www.officialproject.my.id/cbt-online/index.html`.
+Sistem ujian (siswa.html, script.js, api.php) tidak diubah sama sekali.
 
-## Alamat ujian
-https://www.officialproject.my.id/cbt-online/index.html
+## Cara membuat APK
+1. Install **Android Studio** (versi terbaru), pilih **Open** lalu pilih folder ini. Tunggu Gradle sync
+   selesai (otomatis mengunduh Gradle 8.7 & SDK 34; butuh internet).
+2. Uji: colok HP (USB debugging aktif) lalu tekan **Run**.
+3. APK untuk dibagikan: **Build > Build Bundle(s)/APK(s) > Build APK(s)**
+   (hasil: `app/build/outputs/apk/debug/app-debug.apk`).
+4. Untuk rilis: **Build > Generate Signed Bundle / APK**, buat keystore
+   (SIMPAN keystore & passwordnya baik-baik).
+
+## Pengaturan (file `Config.java`)
+| Konstanta | Fungsi |
+|---|---|
+| `EXAM_URL` | Alamat halaman ujian |
+| `ALLOWED_HOST` | Domain yang boleh dibuka (tautan lain diblokir) |
+| `EXIT_PIN` | PIN pengawas untuk keluar (`""` = hanya konfirmasi Ya/Tidak). **Ganti PIN default 2026!** |
+| `USE_SCREEN_PINNING` | Pin layar agar Home/Recent sulit dipakai |
+| `BLOCK_SCREENSHOT` | Blokir screenshot & rekam layar (FLAG_SECURE) |
+
+## Mengganti logo
+Klik kanan `app/src/main/res` > **New > Image Asset**, pilih `logo.png` sekolah.
+Logo di layar pembuka (`drawable/ic_book.xml`) bisa diganti dengan gambar sendiri.
 
 ## Fitur
-- Langsung memilih tombol "Masuk sebagai Siswa" pada halaman awal.
-- WebView dengan JavaScript, DOM Storage, cookies, dan dukungan kamera.
-- Mode layar penuh.
-- FLAG_SECURE untuk memblokir screenshot pada Android yang mendukungnya.
-- Tombol Back ditahan selama tampilan ujian (`#view-ujian`) aktif.
-- Konfirmasi keluar saat tidak sedang mengerjakan ujian.
+- Fullscreen immersive, layar tetap menyala, portrait & landscape
+  (rotasi tidak me-reload halaman, jadi timer/kamera tidak terganggu).
+- Anti-screenshot (FLAG_SECURE): layar hitam di Recent Apps & rekaman layar.
+- Tombol Back tidak mundur halaman; hanya menampilkan dialog keluar (dengan PIN pengawas).
+- Deteksi pindah aplikasi / split-screen: peringatan + penghitung pelanggaran.
+- Izin kamera diminta saat aplikasi dibuka; diteruskan ke getUserMedia di halaman ujian.
+- Hanya domain sekolah yang bisa dibuka; halaman "Coba Lagi" saat offline.
+- User-Agent ditambah `CBTApp/1.0 SDITHT`.
 
-## Build APK otomatis melalui GitHub (tanpa Android Studio)
-
-1. Buat repository baru di GitHub, lalu unggah seluruh isi folder `HT_CBT_Exam_Browser` ke repository tersebut.
-2. Pastikan file workflow `.github/workflows/build-apk.yml` ikut terunggah.
-3. Buka tab **Actions** di repository GitHub. Jika diminta, pilih **I understand my workflows, go ahead and enable them**.
-4. Workflow **Build Android APK** akan berjalan otomatis saat ada push ke branch `main` atau `master`. Anda juga bisa menjalankannya lewat **Actions > Build Android APK > Run workflow**.
-5. Setelah status workflow hijau, buka hasil run tersebut dan unduh artifact **HT-CBT-Exam-Browser-debug**. Di dalam ZIP artifact terdapat `app-debug.apk`.
-6. Pindahkan APK ke HP Android, buka file tersebut, lalu izinkan pemasangan dari sumber ini jika Android memintanya.
-
-Untuk membuat halaman rilis yang bisa diunduh, buat dan push tag versi, misalnya:
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-Workflow akan membangun APK dan melampirkannya pada **GitHub Releases**. APK debug ini cocok untuk pengujian/internal; untuk distribusi publik jangka panjang, siapkan penandatanganan release dengan keystore yang disimpan sebagai GitHub Secrets.
-
-## Catatan penting
-- Proyek ini adalah source project Android Studio, bukan APK yang sudah ditandatangani.
-- Website harus tetap online dan endpoint `api.php` harus aktif.
-- `siswa.html` dan `script.js` tetap di hosting; aplikasi memuat website yang sudah ada.
-- Script otomatis memilih tombol dengan teks "Masuk sebagai Siswa". Jika desain/teks tombol di website berubah, penyesuaian selector mungkin diperlukan.
-- Izin kamera diminta melalui dialog izin Android ketika website meminta kamera.
-- `FLAG_SECURE` dan pembatasan tombol Back bukan kiosk mode penuh. Untuk penguncian perangkat tingkat sekolah diperlukan Android Enterprise/Lock Task Mode yang dikonfigurasi oleh administrator perangkat.
-- Uji terlebih dahulu di beberapa tipe HP Android, terutama alur login siswa, izin kamera, timer, autosave, dan pengiriman jawaban.
+## Batasan
+- **Screen pinning**: Android menampilkan dialog "Sematkan aplikasi"; siswa bisa menolak.
+  Kunci penuh (kiosk) butuh HP dikelola sebagai *device owner* / MDM.
+- Pelanggaran hanya ditampilkan di HP. Agar masuk ke server/pengawas, siswa.html perlu dimodifikasi.
+- Aplikasi bisa **diwajibkan** di server: tolak login jika User-Agent tidak mengandung `CBTApp/`.

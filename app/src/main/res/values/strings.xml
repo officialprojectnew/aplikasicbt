@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">AplikasiCBT-online</string>
+    <string name="splash_title">AplikasiCBT-online</string>
+    <string name="splash_subtitle">Memuat halaman ujian...</string>
+</resources>

@@ -1,0 +1,357 @@
+package id.sch.hidayatuttaufiq.cbt;
+
+import android.Manifest;
+import android.annotation.SuppressLint;
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.text.InputType;
+import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
+import android.view.WindowManager;
+import android.webkit.CookieManager;
+import android.webkit.PermissionRequest;
+import android.webkit.RenderProcessGoneDetail;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.provider.Settings;
+import android.widget.EditText;
+import android.widget.Toast;
+
+public class MainActivity extends Activity {
+
+    private static final int REQ_CAMERA = 101;
+
+    private WebView web;
+    private View splash;
+
+    private String activeExamUrl = Config.EXAM_URL;
+    private String activeAllowedHost = Config.ALLOWED_HOST;
+
+    private PermissionRequest pendingWebPermission;
+    private boolean waitingPermission = false;   // dialog izin sedang tampil -> jangan hitung sbg pindah app
+    private boolean leftApp = false;
+    private int violations = 0;
+    private boolean exitDialogShowing = false;
+    private boolean warnDialogShowing = false;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        if (Config.BLOCK_SCREENSHOT) {
+            getWindow().setFlags(WindowManager.LayoutParams.FLAG_SECURE,
+                    WindowManager.LayoutParams.FLAG_SECURE);
+        }
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        if (Build.VERSION.SDK_INT >= 28) {
+            getWindow().getAttributes().layoutInDisplayCutoutMode =
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+        }
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+
+        // Ambil URL hasil scan barcode jika tersedia
+        String scannedUrl = getIntent().getStringExtra("URL_UJIAN");
+        if (scannedUrl != null && !scannedUrl.trim().isEmpty()) {
+            activeExamUrl = scannedUrl.trim();
+            Uri parsed = Uri.parse(activeExamUrl);
+            if (parsed.getHost() != null && !parsed.getHost().isEmpty()) {
+                String h = parsed.getHost().toLowerCase();
+                if (h.startsWith("www.")) {
+                    h = h.substring(4);
+                }
+                activeAllowedHost = h;
+            }
+        }
+
+        web = findViewById(R.id.webview);
+        splash = findViewById(R.id.splash);
+
+        setupWebView();
+        hideSystemUi();
+
+        // Izin kamera diminta di awal supaya webcam ujian langsung siap
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            waitingPermission = true;
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQ_CAMERA);
+        }
+
+        if (savedInstanceState != null) {
+            web.restoreState(savedInstanceState);
+        } else {
+            web.loadUrl(activeExamUrl);
+        }
+    }
+
+    @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
+    private void setupWebView() {
+        WebSettings s = web.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);              // localStorage dipakai sesi login CBT
+        s.setDatabaseEnabled(true);
+        s.setMediaPlaybackRequiresUserGesture(false);
+        s.setAllowFileAccess(false);
+        s.setAllowContentAccess(false);
+        s.setSupportZoom(false);
+        s.setBuiltInZoomControls(false);
+        s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+        s.setCacheMode(WebSettings.LOAD_DEFAULT);
+        s.setUserAgentString(s.getUserAgentString() + Config.UA_SUFFIX);
+
+        CookieManager.getInstance().setAcceptCookie(true);
+        CookieManager.getInstance().setAcceptThirdPartyCookies(web, false);
+
+        // Matikan seleksi/salin lewat tekan lama
+        web.setLongClickable(false);
+        web.setOnLongClickListener(v -> true);
+        web.setHapticFeedbackEnabled(false);
+        web.setOverScrollMode(View.OVER_SCROLL_NEVER);
+
+        web.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest req) {
+                Uri u = req.getUrl();
+                String scheme = u.getScheme();
+                String host = u.getHost();
+                boolean validScheme = "https".equalsIgnoreCase(scheme) || "http".equalsIgnoreCase(scheme);
+                boolean ok = validScheme && host != null
+                        && (host.equalsIgnoreCase(activeAllowedHost)
+                        || host.toLowerCase().endsWith("." + activeAllowedHost.toLowerCase()));
+                if (!ok) {
+                    Toast.makeText(MainActivity.this,
+                            "Tautan di luar sistem ujian diblokir", Toast.LENGTH_SHORT).show();
+                }
+                return !ok;   // true = diblokir
+            }
+
+            @Override
+            public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                if (splash.getVisibility() != View.GONE && !url.startsWith("data:")) {
+                    splash.setVisibility(View.VISIBLE);
+                }
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                splash.setVisibility(View.GONE);
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest req, WebResourceError err) {
+                if (req.isForMainFrame()) showErrorPage(view);
+            }
+
+            @Override
+            public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                web.loadUrl(activeExamUrl);
+                return true;
+            }
+        });
+
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onPermissionRequest(final PermissionRequest request) {
+                runOnUiThread(() -> handleWebPermission(request));
+            }
+        });
+    }
+
+    // ---------- Kamera ----------
+    private void handleWebPermission(PermissionRequest request) {
+        boolean wantsCamera = false;
+        for (String r : request.getResources()) {
+            if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(r)) wantsCamera = true;
+        }
+        if (!wantsCamera) { request.deny(); return; }
+
+        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            request.grant(new String[]{PermissionRequest.RESOURCE_VIDEO_CAPTURE});
+        } else {
+            pendingWebPermission = request;
+            waitingPermission = true;
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQ_CAMERA);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
+        super.onRequestPermissionsResult(code, perms, results);
+        if (code != REQ_CAMERA) return;
+        boolean granted = results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED;
+        if (pendingWebPermission != null) {
+            if (granted) pendingWebPermission.grant(new String[]{PermissionRequest.RESOURCE_VIDEO_CAPTURE});
+            else pendingWebPermission.deny();
+            pendingWebPermission = null;
+        }
+        if (!granted) {
+            new AlertDialog.Builder(this)
+                    .setTitle("Izin kamera diperlukan")
+                    .setMessage("Ujian ini memakai kamera untuk pemantauan. Aktifkan izin Kamera di pengaturan aplikasi, lalu buka ulang halaman.")
+                    .setPositiveButton("Buka Pengaturan", (d, w) -> {
+                        waitingPermission = true;
+                        startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.parse("package:" + getPackageName())));
+                    })
+                    .setNegativeButton("Nanti", null)
+                    .show();
+        }
+        hideSystemUi();
+    }
+
+    // ---------- Halaman error (offline) ----------
+    private void showErrorPage(WebView view) {
+        String html = "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+                + "<style>body{font-family:sans-serif;background:#f0fdf4;color:#14532d;text-align:center;padding:12vh 24px}"
+                + "a{display:inline-block;margin-top:24px;padding:14px 28px;background:#16a34a;color:#fff;"
+                + "border-radius:12px;text-decoration:none;font-weight:bold}</style></head><body>"
+                + "<h2>Tidak dapat terhubung</h2>"
+                + "<p>Periksa koneksi internet / Wi-Fi sekolah, lalu coba lagi.</p>"
+                + "<a href='" + activeExamUrl + "'>Coba Lagi</a></body></html>";
+        view.loadDataWithBaseURL(activeExamUrl, html, "text/html", "UTF-8", null);
+    }
+
+    // ---------- Mode layar penuh ----------
+    @SuppressWarnings("deprecation")
+    private void hideSystemUi() {
+        if (Build.VERSION.SDK_INT >= 30) {
+            getWindow().setDecorFitsSystemWindows(false);
+            WindowInsetsController c = getWindow().getInsetsController();
+            if (c != null) {
+                c.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            }
+        } else {
+            getWindow().getDecorView().setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                            | View.SYSTEM_UI_FLAG_FULLSCREEN
+                            | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+        }
+    }
+
+    private void startPinning() {
+        if (!Config.USE_SCREEN_PINNING) return;
+        try { startLockTask(); } catch (Exception ignored) { }
+    }
+
+    private void stopPinning() {
+        try { stopLockTask(); } catch (Exception ignored) { }
+    }
+
+    // ---------- Siklus hidup & deteksi pindah aplikasi ----------
+    @Override
+    protected void onResume() {
+        super.onResume();
+        web.onResume();
+        hideSystemUi();
+        startPinning();
+
+        if (leftApp) {
+            leftApp = false;
+            violations++;
+            showViolationWarning();
+        }
+        waitingPermission = false;
+    }
+
+    @Override
+    protected void onPause() {
+        if (!waitingPermission && !isFinishing()) leftApp = true;
+        web.onPause();
+        super.onPause();
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) hideSystemUi();
+    }
+
+    @Override
+    public void onMultiWindowModeChanged(boolean inMultiWindow) {
+        super.onMultiWindowModeChanged(inMultiWindow);
+        if (inMultiWindow) {
+            violations++;
+            showViolationWarning();
+        }
+    }
+
+    private void showViolationWarning() {
+        if (warnDialogShowing) return;
+        warnDialogShowing = true;
+        String msg = "Anda terdeteksi meninggalkan aplikasi ujian.\n"
+                + "Pelanggaran ke-" + violations + ".\n\n"
+                + "Tetap berada di aplikasi selama ujian berlangsung. "
+                + "Pelanggaran berulang dapat dilaporkan kepada pengawas.";
+        new AlertDialog.Builder(this)
+                .setTitle("⚠ Peringatan")
+                .setMessage(msg)
+                .setCancelable(false)
+                .setPositiveButton("Saya Mengerti", (d, w) -> { warnDialogShowing = false; hideSystemUi(); })
+                .show();
+    }
+
+    // ---------- Tombol Back & keluar ----------
+    @SuppressWarnings("deprecation")
+    @Override
+    public void onBackPressed() {
+        // Back tidak pernah mundur halaman ujian; hanya menampilkan konfirmasi keluar.
+        showExitDialog();
+    }
+
+    private void showExitDialog() {
+        if (exitDialogShowing) return;
+        exitDialogShowing = true;
+
+        final boolean usePin = Config.EXIT_PIN != null && !Config.EXIT_PIN.isEmpty();
+        AlertDialog.Builder b = new AlertDialog.Builder(this)
+                .setTitle("Keluar dari ujian?")
+                .setCancelable(false);
+
+        final EditText pin = new EditText(this);
+        if (usePin) {
+            pin.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+            pin.setHint("PIN pengawas");
+            b.setMessage("Masukkan PIN pengawas untuk keluar. Jawaban yang sudah tersimpan di server tidak hilang.");
+            b.setView(pin);
+        } else {
+            b.setMessage("Apakah Anda yakin ingin keluar dari aplikasi ujian?");
+        }
+
+        b.setPositiveButton("Keluar", (d, w) -> {
+            exitDialogShowing = false;
+            if (usePin && !Config.EXIT_PIN.equals(pin.getText().toString().trim())) {
+                Toast.makeText(this, "PIN salah", Toast.LENGTH_SHORT).show();
+                hideSystemUi();
+                return;
+            }
+            stopPinning();
+            finishAndRemoveTask();
+        });
+        b.setNegativeButton("Lanjut Ujian", (d, w) -> { exitDialogShowing = false; hideSystemUi(); });
+        b.show();
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle out) {
+        super.onSaveInstanceState(out);
+        web.saveState(out);
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (web != null) { web.stopLoading(); web.destroy(); }
+        super.onDestroy();
+    }
+}
