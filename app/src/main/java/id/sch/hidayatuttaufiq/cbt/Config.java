@@ -13,6 +13,9 @@ public final class Config {
     /** PIN pengawas untuk keluar aplikasi. Kosongkan ("") jika hanya ingin konfirmasi Ya/Tidak. */
     public static final String EXIT_PIN = "123456789";
 
+    /** PIN khusus rahasia dari guru untuk membuka kunci layar hitam jika siswa unpin/keluar aplikasi. */
+    public static final String UNLOCK_PIN = "1476";
+
     /** Aktifkan pin layar (screen pinning) agar tombol Home/Recent sulit dipakai. */
     public static final boolean USE_SCREEN_PINNING = true;
 

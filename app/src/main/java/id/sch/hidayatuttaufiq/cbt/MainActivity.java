@@ -3,19 +3,25 @@ package id.sch.hidayatuttaufiq.cbt;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.AlertDialog;
+import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.text.InputType;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
 import android.webkit.PermissionRequest;
 import android.webkit.RenderProcessGoneDetail;
@@ -25,15 +31,20 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.Button;
 import android.widget.EditText;
 import android.widget.Toast;
 
 public class MainActivity extends Activity {
 
     private static final int REQ_CAMERA = 101;
+    private static final String PREF_NAME = "cbt_security_prefs";
+    private static final String KEY_CHEAT_LOCKED = "cheat_locked";
 
     private WebView web;
     private View splash;
+    private View cheatLockOverlay;
+    private EditText etUnlockPin;
 
     private String activeExamUrl = Config.EXAM_URL;
     private String activeAllowedHost = Config.ALLOWED_HOST;
@@ -42,9 +53,19 @@ public class MainActivity extends Activity {
     private PermissionRequest pendingWebPermission;
     private boolean waitingPermission = false;   // dialog izin sedang tampil -> jangan hitung sbg pindah app
     private boolean leftApp = false;
-    private int violations = 0;
+    private boolean wasPinned = false;
+    private boolean isExitingIntentionally = false;
+    private boolean cheatLocked = false;
     private boolean exitDialogShowing = false;
-    private boolean warnDialogShowing = false;
+
+    private final Handler pinMonitorHandler = new Handler(Looper.getMainLooper());
+    private final Runnable pinMonitorRunnable = new Runnable() {
+        @Override
+        public void run() {
+            checkPinState();
+            pinMonitorHandler.postDelayed(this, 1000);
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -68,6 +89,17 @@ public class MainActivity extends Activity {
 
         web = findViewById(R.id.webview);
         splash = findViewById(R.id.splash);
+        cheatLockOverlay = findViewById(R.id.cheat_lock_overlay);
+        etUnlockPin = findViewById(R.id.etUnlockPin);
+        Button btnUnlockCheat = findViewById(R.id.btnUnlockCheat);
+
+        btnUnlockCheat.setOnClickListener(v -> verifyUnlockPin());
+
+        // Cek apakah sebelumnya terkunci karena unpin/keluar aplikasi
+        SharedPreferences prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
+        if (prefs.getBoolean(KEY_CHEAT_LOCKED, false)) {
+            triggerCheatLock();
+        }
 
         setupWebView();
         hideSystemUi();
@@ -123,6 +155,67 @@ public class MainActivity extends Activity {
         String h = host.toLowerCase();
         String allowed = activeAllowedHost.toLowerCase();
         return h.equals(allowed) || h.endsWith("." + allowed);
+    }
+
+    private boolean isCurrentlyPinned() {
+        ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+        if (am == null) return false;
+        return am.getLockTaskModeState() != ActivityManager.LOCK_TASK_MODE_NONE;
+    }
+
+    private void checkPinState() {
+        if (isExitingIntentionally || waitingPermission || cheatLocked) return;
+        boolean pinnedNow = isCurrentlyPinned();
+        if (pinnedNow) {
+            wasPinned = true;
+        } else if (wasPinned) {
+            // Siswa melakukan unpin (tahan swipe atas / tombol back+recent)
+            wasPinned = false;
+            triggerCheatLock();
+        }
+    }
+
+    private void triggerCheatLock() {
+        cheatLocked = true;
+        getSharedPreferences(PREF_NAME, MODE_PRIVATE)
+                .edit()
+                .putBoolean(KEY_CHEAT_LOCKED, true)
+                .apply();
+        if (cheatLockOverlay != null) {
+            cheatLockOverlay.setVisibility(View.VISIBLE);
+            cheatLockOverlay.bringToFront();
+        }
+        if (etUnlockPin != null) {
+            etUnlockPin.setText("");
+        }
+    }
+
+    private void verifyUnlockPin() {
+        String input = etUnlockPin.getText().toString().trim();
+        if (Config.UNLOCK_PIN.equals(input)) {
+            cheatLocked = false;
+            wasPinned = false;
+            leftApp = false;
+            getSharedPreferences(PREF_NAME, MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(KEY_CHEAT_LOCKED, false)
+                    .apply();
+
+            // Sembunyikan keyboard
+            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) {
+                imm.hideSoftInputFromWindow(etUnlockPin.getWindowToken(), 0);
+            }
+
+            etUnlockPin.setText("");
+            cheatLockOverlay.setVisibility(View.GONE);
+            Toast.makeText(this, "Kunci dibuka. Silakan lanjutkan ujian.", Toast.LENGTH_SHORT).show();
+            hideSystemUi();
+            startPinning();
+        } else {
+            etUnlockPin.setText("");
+            Toast.makeText(this, "PIN khusus salah!", Toast.LENGTH_SHORT).show();
+        }
     }
 
     @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
@@ -309,25 +402,40 @@ public class MainActivity extends Activity {
         try { stopLockTask(); } catch (Exception ignored) { }
     }
 
-    // ---------- Siklus hidup & deteksi pindah aplikasi ----------
+    // ---------- Siklus hidup & deteksi unpin / pindah aplikasi ----------
     @Override
     protected void onResume() {
         super.onResume();
         web.onResume();
         hideSystemUi();
-        startPinning();
 
         if (leftApp) {
             leftApp = false;
-            violations++;
-            showViolationWarning();
+            triggerCheatLock();
+        } else {
+            checkPinState();
         }
+
+        if (!cheatLocked) {
+            startPinning();
+        }
+
+        pinMonitorHandler.removeCallbacks(pinMonitorRunnable);
+        pinMonitorHandler.postDelayed(pinMonitorRunnable, 1000);
         waitingPermission = false;
     }
 
     @Override
     protected void onPause() {
-        if (!waitingPermission && !isFinishing()) leftApp = true;
+        pinMonitorHandler.removeCallbacks(pinMonitorRunnable);
+        if (!waitingPermission && !isFinishing() && !isExitingIntentionally) {
+            leftApp = true;
+            // Langsung tandai terkunci agar jika aplikasi ditutup paksa lalu dibuka lagi, blackscreen tetap muncul
+            getSharedPreferences(PREF_NAME, MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(KEY_CHEAT_LOCKED, true)
+                    .apply();
+        }
         web.onPause();
         super.onPause();
     }
@@ -335,37 +443,28 @@ public class MainActivity extends Activity {
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) hideSystemUi();
+        if (hasFocus) {
+            hideSystemUi();
+            checkPinState();
+        }
     }
 
     @Override
     public void onMultiWindowModeChanged(boolean inMultiWindow) {
         super.onMultiWindowModeChanged(inMultiWindow);
         if (inMultiWindow) {
-            violations++;
-            showViolationWarning();
+            triggerCheatLock();
         }
-    }
-
-    private void showViolationWarning() {
-        if (warnDialogShowing) return;
-        warnDialogShowing = true;
-        String msg = "Anda terdeteksi meninggalkan aplikasi ujian.\n"
-                + "Pelanggaran ke-" + violations + ".\n\n"
-                + "Tetap berada di aplikasi selama ujian berlangsung. "
-                + "Pelanggaran berulang dapat dilaporkan kepada pengawas.";
-        new AlertDialog.Builder(this)
-                .setTitle("⚠ Peringatan")
-                .setMessage(msg)
-                .setCancelable(false)
-                .setPositiveButton("Saya Mengerti", (d, w) -> { warnDialogShowing = false; hideSystemUi(); })
-                .show();
     }
 
     // ---------- Tombol Back & keluar ----------
     @SuppressWarnings("deprecation")
     @Override
     public void onBackPressed() {
+        if (cheatLocked) {
+            Toast.makeText(this, "Masukkan PIN khusus untuk melanjutkan ujian", Toast.LENGTH_SHORT).show();
+            return;
+        }
         // Back tidak pernah mundur halaman ujian; hanya menampilkan konfirmasi keluar.
         showExitDialog();
     }
@@ -396,6 +495,11 @@ public class MainActivity extends Activity {
                 hideSystemUi();
                 return;
             }
+            isExitingIntentionally = true;
+            getSharedPreferences(PREF_NAME, MODE_PRIVATE)
+                    .edit()
+                    .putBoolean(KEY_CHEAT_LOCKED, false)
+                    .apply();
             stopPinning();
             finishAndRemoveTask();
         });
@@ -416,6 +520,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        pinMonitorHandler.removeCallbacks(pinMonitorRunnable);
         if (web != null) { web.stopLoading(); web.destroy(); }
         super.onDestroy();
     }

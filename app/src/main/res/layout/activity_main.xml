@@ -50,4 +50,63 @@
             android:layout_height="36dp"
             android:layout_marginTop="28dp" />
     </LinearLayout>
+
+    <!-- Layar Hitam Anti-Kecurangan (Unpin / Keluar Aplikasi) -->
+    <LinearLayout
+        android:id="@+id/cheat_lock_overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#000000"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="28dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:text="⚠ AKSES TERKUNCI"
+            android:textColor="#EF4444"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvCheatMessage"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="28dp"
+            android:gravity="center"
+            android:lineSpacingExtra="4dp"
+            android:text="Siswa mencoba membuka pin, harap meminta kunci PIN khusus untuk melanjutkan ujian"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp" />
+
+        <EditText
+            android:id="@+id/etUnlockPin"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginBottom="16dp"
+            android:background="#1E293B"
+            android:gravity="center"
+            android:hint="Masukkan PIN Khusus"
+            android:inputType="numberPassword"
+            android:paddingLeft="16dp"
+            android:paddingRight="16dp"
+            android:textColor="#FFFFFF"
+            android:textColorHint="#94A3B8"
+            android:textSize="18sp" />
+
+        <Button
+            android:id="@+id/btnUnlockCheat"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:background="@drawable/bg_btn_green"
+            android:text="LANJUTKAN UJIAN"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+    </LinearLayout>
 </FrameLayout>
