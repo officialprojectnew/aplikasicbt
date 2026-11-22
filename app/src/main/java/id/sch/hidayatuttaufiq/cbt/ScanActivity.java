@@ -21,11 +21,15 @@ public class ScanActivity extends Activity {
     }
 
     private void mulaiScan() {
-        IntentIntegrator integrator = new IntentIntegrator(this);
-        integrator.setPrompt("Arahkan kamera ke Barcode / QR Code Ujian");
-        integrator.setBeepEnabled(true);
-        integrator.setOrientationLocked(false);
-        integrator.initiateScan();
+        try {
+            IntentIntegrator integrator = new IntentIntegrator(this);
+            integrator.setPrompt("Arahkan kamera ke Barcode / QR Code Ujian");
+            integrator.setBeepEnabled(true);
+            integrator.setOrientationLocked(false);
+            integrator.initiateScan();
+        } catch (Exception e) {
+            Toast.makeText(this, "Gagal membuka kamera: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     @Override
